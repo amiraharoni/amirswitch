@@ -1,7 +1,6 @@
 {
   "recommendations": [
     "mathiasfrohlich.kotlin",
-    "fwcd.kotlin",
     "platformio.platformio-ide",
     "antyos.openscad",
     "tobiasalthoff.atom-material-theme-vscode",

@@ -2,5 +2,6 @@
     "platformio-ide.projectDir": "firmware",
     "terminal.integrated.env.osx": {
         "PATH": "${env:HOME}/Library/Android/sdk/platform-tools:${env:PATH}"
-    }
+    },
+    "kotlin.languageServer.enabled": false
 }
