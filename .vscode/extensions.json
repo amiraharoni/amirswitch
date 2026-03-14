@@ -5,6 +5,7 @@
     "platformio.platformio-ide",
     "antyos.openscad",
     "tobiasalthoff.atom-material-theme-vscode",
-    "vscjava.vscode-gradle"
+    "vscjava.vscode-gradle",
+    "adelphes.android-dev-ext"
   ]
 }
