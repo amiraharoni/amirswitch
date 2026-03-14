@@ -26,13 +26,17 @@
 // ============================================================
 // CONFIGURATION — Change these values before uploading!
 // ============================================================
-#define WIFI_SSID       "YOUR_WIFI_SSID"
+#define WIFI_SSID       "Aharoni 2.4"
+#ifndef WIFI_PASSWORD
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
+#endif
 
-#define MQTT_HOST       "your-cluster.s1.eu.hivemq.cloud"
+#define MQTT_HOST       "0742ead081124a0fa2248931ff6032a1.s1.eu.hivemq.cloud"
 #define MQTT_PORT       8883
-#define MQTT_USER       "your-mqtt-username"
+#define MQTT_USER       "amirswitch"
+#ifndef MQTT_PASS
 #define MQTT_PASS       "your-mqtt-password"
+#endif
 
 #define DEVICE_ID       "device_001"
 

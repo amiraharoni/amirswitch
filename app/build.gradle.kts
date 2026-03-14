@@ -3,6 +3,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val envFile = rootProject.file(".env")
+val env = mutableMapOf<String, String>()
+if (envFile.exists()) {
+    envFile.readLines().forEach { line ->
+        val trimmed = line.trim()
+        if (trimmed.isNotEmpty() && !trimmed.startsWith("#") && '=' in trimmed) {
+            val (key, value) = trimmed.split("=", limit = 2)
+            env[key.trim()] = value.trim()
+        }
+    }
+}
+
 android {
     namespace = "com.amirswitch"
     compileSdk = 36
@@ -13,6 +25,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        buildConfigField("String", "MQTT_PASS", "\"${env["MQTT_PASS"] ?: ""}\"")
     }
 
     buildTypes {
@@ -38,6 +52,14 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/io.netty.versions.properties"
+        }
     }
 }
 

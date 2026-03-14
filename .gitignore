@@ -10,7 +10,8 @@ local.properties
 .idea/
 *.iml
 
-# Android
+# Secrets
+.env
 mqtt.properties
 
 # Firmware (PlatformIO)

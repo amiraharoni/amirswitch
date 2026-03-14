@@ -1,5 +1,6 @@
 package com.amirswitch.data
 
+import com.amirswitch.BuildConfig
 import com.amirswitch.data.models.Schedule
 import com.hivemq.client.mqtt.datatypes.MqttQos
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
@@ -10,10 +11,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 
 class MqttRepository(
-    private val host: String = "YOUR_CLUSTER.s1.eu.hivemq.cloud",
+    private val host: String = "0742ead081124a0fa2248931ff6032a1.s1.eu.hivemq.cloud",
     private val port: Int = 8883,
-    private val username: String = "YOUR_MQTT_USER",
-    private val password: String = "YOUR_MQTT_PASS",
+    private val username: String = "amirswitch",
+    private val password: String = BuildConfig.MQTT_PASS,
     private val timezone: String = "Asia/Jerusalem"
 ) {
     private var deviceId = "device_001"
