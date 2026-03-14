@@ -272,7 +272,7 @@ void checkSchedules() {
         return;
     }
 
-    JsonDocument doc;
+    DynamicJsonDocument doc(4096);
     DeserializationError error = deserializeJson(doc, jsonStr);
     if (error) {
         Serial.print("JSON parse error: ");
