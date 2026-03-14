@@ -2,18 +2,16 @@ package com.amirswitch.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.amirswitch.data.FirebaseRepository
+import com.amirswitch.data.MqttRepository
 import com.amirswitch.data.models.Schedule
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-/**
- * ViewModel shared across all screens.
- * Manages device state, online status, and schedules.
- */
 class DeviceViewModel : ViewModel() {
 
-    private val repository = FirebaseRepository()
+    private val repository = MqttRepository()
 
     // ========================================================
     // UI State
@@ -31,8 +29,10 @@ class DeviceViewModel : ViewModel() {
     private val _lastSeen = MutableStateFlow(0L)
     val lastSeen: StateFlow<Long> = _lastSeen.asStateFlow()
 
-    private val _schedules = MutableStateFlow<List<Schedule>>(emptyList())
-    val schedules: StateFlow<List<Schedule>> = _schedules.asStateFlow()
+    private val _schedules =
+        MutableStateFlow<List<Schedule>>(emptyList())
+    val schedules: StateFlow<List<Schedule>> =
+        _schedules.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -42,135 +42,74 @@ class DeviceViewModel : ViewModel() {
     // ========================================================
 
     init {
-        viewModelScope.launch {
-            try {
-                // Sign in anonymously
-                repository.signInAnonymously()
+        repository.connect()
+        _isLoading.value = false
 
-                // Start observing Firebase data
-                launch {
-                    repository.observeDeviceState().collect { state ->
-                        _deviceState.value = state
-                        _isLoading.value = false
-                    }
+        viewModelScope.launch {
+            launch {
+                repository.observeDeviceState().collect {
+                    _deviceState.value = it
                 }
-                launch {
-                    repository.observeOnlineStatus().collect { online ->
-                        _isOnline.value = online
-                    }
+            }
+            launch {
+                repository.observeOnlineStatus().collect {
+                    _isOnline.value = it
                 }
-                launch {
-                    repository.observeLastSeen().collect { ts ->
-                        _lastSeen.value = ts
-                    }
+            }
+            launch {
+                repository.observeLastSeen().collect {
+                    _lastSeen.value = it
                 }
-                launch {
-                    repository.observeSchedules().collect { list ->
-                        _schedules.value = list
-                    }
+            }
+            launch {
+                repository.observeSchedules().collect {
+                    _schedules.value = it
                 }
-            } catch (e: Exception) {
-                _error.value = "Connection failed: ${e.message}"
-                _isLoading.value = false
             }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        repository.disconnect()
     }
 
     // ========================================================
     // Actions
     // ========================================================
 
-    /**
-     * Toggle the device relay ON/OFF.
-     */
     fun toggleDevice() {
-        viewModelScope.launch {
-            try {
-                repository.setDeviceState(!_deviceState.value)
-            } catch (e: Exception) {
-                _error.value = "Failed to toggle: ${e.message}"
-            }
-        }
+        repository.setDeviceState(!_deviceState.value)
     }
 
-    /**
-     * Set device to a specific state.
-     */
     fun setDeviceState(on: Boolean) {
-        viewModelScope.launch {
-            try {
-                repository.setDeviceState(on)
-            } catch (e: Exception) {
-                _error.value = "Failed to set state: ${e.message}"
-            }
-        }
+        repository.setDeviceState(on)
     }
 
-    /**
-     * Add a new schedule.
-     */
     fun addSchedule(schedule: Schedule) {
-        viewModelScope.launch {
-            try {
-                repository.addSchedule(schedule)
-            } catch (e: Exception) {
-                _error.value = "Failed to add schedule: ${e.message}"
-            }
-        }
+        repository.addSchedule(schedule)
     }
 
-    /**
-     * Update an existing schedule.
-     */
     fun updateSchedule(schedule: Schedule) {
-        viewModelScope.launch {
-            try {
-                repository.updateSchedule(schedule)
-            } catch (e: Exception) {
-                _error.value = "Failed to update schedule: ${e.message}"
-            }
-        }
+        repository.updateSchedule(schedule)
     }
 
-    /**
-     * Delete a schedule.
-     */
     fun deleteSchedule(scheduleId: String) {
-        viewModelScope.launch {
-            try {
-                repository.deleteSchedule(scheduleId)
-            } catch (e: Exception) {
-                _error.value = "Failed to delete schedule: ${e.message}"
-            }
-        }
+        repository.deleteSchedule(scheduleId)
     }
 
-    /**
-     * Toggle a schedule's enabled/disabled state.
-     */
-    fun toggleScheduleEnabled(scheduleId: String, enabled: Boolean) {
-        viewModelScope.launch {
-            try {
-                repository.toggleSchedule(scheduleId, enabled)
-            } catch (e: Exception) {
-                _error.value = "Failed to toggle schedule: ${e.message}"
-            }
-        }
+    fun toggleScheduleEnabled(
+        scheduleId: String, enabled: Boolean
+    ) {
+        repository.toggleSchedule(scheduleId, enabled)
     }
 
-    /**
-     * Update the device ID (for connecting to a different device).
-     */
     fun setDeviceId(id: String) {
         repository.setDeviceId(id)
-        // Re-initialize observers would be needed here for a full implementation
     }
 
     fun getDeviceId(): String = repository.getDeviceId()
 
-    /**
-     * Clear error message.
-     */
     fun clearError() {
         _error.value = null
     }

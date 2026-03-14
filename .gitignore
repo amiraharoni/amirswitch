@@ -11,7 +11,7 @@ local.properties
 *.iml
 
 # Android
-app/google-services.json
+mqtt.properties
 
 # Firmware (PlatformIO)
 firmware/.pio

@@ -1,27 +1,27 @@
 /*
  * AmirSwitch - Smart Plug Firmware
- * ESP32 + Firebase Realtime Database
+ * ESP32 + HiveMQ Cloud MQTT
  *
  * Wiring:
- *   ESP32 GPIO27  → Relay IN (signal)
- *   ESP32 VIN     ← HLK-PM01 5V out
- *   ESP32 GND     ← HLK-PM01 GND
- *   Relay VCC     ← HLK-PM01 5V out
- *   Relay GND     ← HLK-PM01 GND
- *   Relay COM     ← Mains LIVE in
- *   Relay NO      → Output socket LIVE
- *   Mains NEUTRAL → Output socket NEUTRAL (direct)
+ *   ESP32 GPIO27  -> Relay IN (signal)
+ *   ESP32 VIN     <- HLK-PM01 5V out
+ *   ESP32 GND     <- HLK-PM01 GND
+ *   Relay VCC     <- HLK-PM01 5V out
+ *   Relay GND     <- HLK-PM01 GND
+ *   Relay COM     <- Mains LIVE in
+ *   Relay NO      -> Output socket LIVE
+ *   Mains NEUTRAL -> Output socket NEUTRAL (direct)
  *
  * SAFETY: Never work on this device while plugged into mains!
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WiFiUdp.h>
 #include <NTPClient.h>
-#include <FirebaseESP32.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <time.h>
 
 // ============================================================
 // CONFIGURATION — Change these values before uploading!
@@ -29,8 +29,10 @@
 #define WIFI_SSID       "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
 
-#define FIREBASE_HOST   "your-project-id.firebaseio.com"
-#define FIREBASE_AUTH   "your-firebase-database-secret"
+#define MQTT_HOST       "your-cluster.s1.eu.hivemq.cloud"
+#define MQTT_PORT       8883
+#define MQTT_USER       "your-mqtt-username"
+#define MQTT_PASS       "your-mqtt-password"
 
 #define DEVICE_ID       "device_001"
 
@@ -43,47 +45,98 @@
 #define SCHEDULE_CHECK_INTERVAL_MS 10000 // 10 seconds
 #define WIFI_RETRY_DELAY_MS     5000
 #define MAX_WIFI_RETRIES        20
+#define MQTT_RECONNECT_DELAY_MS 5000
 
-// Timezone offset (Israel = UTC+2, or UTC+3 in summer)
-#define UTC_OFFSET_SECONDS      7200    // UTC+2 (change to 10800 for summer time)
+// Default timezone offset (Israel = UTC+2), updated from schedule doc
+#define DEFAULT_UTC_OFFSET_SECONDS 7200
+
+// ============================================================
+// ISRG Root X1 CA certificate (Let's Encrypt / HiveMQ Cloud)
+// ============================================================
+static const char ca_cert[] PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B3FaSYAk7YkMXm5Uu0dtJv0JixiXaPb8HIJBqHmJIFtQ+UFj0gPBfCTM5BG2YhZ/
+/Ww6ggIaSCEdEVB4xdFO0FrAIBnIFSQSKr0hMB+Z9IqTwOHpjQWi17EMT8qFpBz
+QVTTaJsjHBqyJMjkFpsb/FpnWkOyLHatbkS/LGTh1coY82GUdocXB2KYULMMG4GD
+n/Fh43j4DHHSU4fqDl/UpAMBOlGXRgz3Bj+3hVL2MFNHK+YvYqxgio4QME3Inby
+j9IJOuqxQhDB3AO0hltS7oGCsJiQMB3Wt7GSGYcfx5JNoI0fSnGIVJm4U+8VTIW5
+GMHNxjkjFU+MFXmGbNJeFRexhiNIeXGiwDaF3LBHYm3TTJkGjMTtJCP2L+FFCr/O
+fpQlAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0G
+A1UdDgQWBBR5tFnm+7bl5AFzgAiIyBpY9umbbTANBgkqhkiG9w0BAQsFAAOCAgEA
+Xnc0F2MSQPF8BVulRgel+Cf36VtBCk/m+QxLPm2NlR0YCOUF1yd4u+nABEH/Pqj6
+s/pSz7sSqhLI6kNmHev8WAaxLuIT5A1mcFJRH2dPMMuiLBkJBiDflOoWBGeEF7GG
+N2Td2XJFERPEtLMOxXyvn2ZRWS8B+ANJwJFHYpQIzifQ/VnalNzaGQxARxlLQ6NG
+bGYknMJITkdJxI8hUgbJr1PAjkkEL7VRg+aRf2DhgEqhYL9DmqRAyuiP7VxbYqjz
+VdA9yCjkSFI/rkWz+VREZnmiLlhMcshCPwKfYGCBRzohJMgbLWNP2IFDqCgny6cE
+C6lJriW+sPDQ8JZJhfAj0ylW6bFmse7mXdLNJWIGdLOwIiHb7B0njwuqGr2JKVPZ
+3LJqgVFp0Fl5GABuakbVCDBhely/XzPEJJmlkB2dFLrBF8n3HfCtZKtswSXi7GkD
+m3n7Y7Z6kM2bWM3Gp8TkyLmFQxJqrpLhhNDmLSdamcWIHnWOCaLMj5mS/MFWO5e5
+RPDTfLPmR1BIZTGA2II8K9R9xvMDwGDxFRUFj6TNxWHpcXSITVDsOLBTr7Q7bXk3
+gFHDgSjPAqcxmC+7uPNmD+14MC/MVNCO6affiTSEqpnw8g3RCkXyH4jBnVfCT0u/
+rDDC+nnQR5T6OJvYAKHF+w6s+sDQrv5AT5V+z/J/fGU=
+-----END CERTIFICATE-----
+)EOF";
+
+// ============================================================
+// MQTT Topics
+// ============================================================
+static const String PREFIX = String("amirswitch/") + DEVICE_ID;
+static const String TOPIC_STATE       = PREFIX + "/state";
+static const String TOPIC_STATE_SET   = PREFIX + "/state/set";
+static const String TOPIC_ONLINE      = PREFIX + "/online";
+static const String TOPIC_LAST_SEEN   = PREFIX + "/last_seen";
+static const String TOPIC_SCHEDULES   = PREFIX + "/schedules";
 
 // ============================================================
 // Global objects
 // ============================================================
-FirebaseData firebaseData;
-FirebaseData streamData;
-FirebaseConfig firebaseConfig;
-FirebaseAuth firebaseAuth;
+WiFiClientSecure espClient;
+PubSubClient mqttClient(espClient);
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", UTC_OFFSET_SECONDS, 60000);
+NTPClient timeClient(ntpUDP, "pool.ntp.org",
+                     DEFAULT_UTC_OFFSET_SECONDS, 60000);
 
 // State
 bool relayState = false;
-bool deviceOnline = false;
 unsigned long lastHeartbeat = 0;
 unsigned long lastScheduleCheck = 0;
+unsigned long lastMqttReconnect = 0;
 
-// Firebase paths
-String devicePath = String("/devices/") + DEVICE_ID;
-String statePath = devicePath + "/state";
-String schedulesPath = devicePath + "/schedules";
-String onlinePath = devicePath + "/online";
-String lastSeenPath = devicePath + "/lastSeen";
+// In-memory schedules from MQTT
+DynamicJsonDocument schedulesDoc(4096);
+int schedulesVersion = -1;
+long utcOffsetSeconds = DEFAULT_UTC_OFFSET_SECONDS;
 
 // ============================================================
 // Function declarations
 // ============================================================
 void setupWiFi();
-void setupFirebase();
+void setupMqtt();
+void reconnectMqtt();
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 void setRelay(bool on);
-void streamCallback(StreamData data);
-void streamTimeoutCallback(bool timeout);
+void publishState();
 void sendHeartbeat();
 void checkSchedules();
 int getDayOfWeek();
 void getTimeHHMM(int &hours, int &minutes);
-bool isTimeInRange(int currentH, int currentM, int onH, int onM, int offH, int offM);
+bool isTimeInRange(
+    int currentH, int currentM,
+    int onH, int onM,
+    int offH, int offM
+);
 
 // ============================================================
 // Setup
@@ -92,40 +145,22 @@ void setup() {
     Serial.begin(115200);
     Serial.println();
     Serial.println("===================================");
-    Serial.println("  AmirSwitch - Smart Plug v1.0");
+    Serial.println("  AmirSwitch - Smart Plug v2.0");
     Serial.println("===================================");
 
-    // Initialize pins
     pinMode(RELAY_PIN, OUTPUT);
     pinMode(LED_PIN, OUTPUT);
-    digitalWrite(RELAY_PIN, LOW);   // Start with relay OFF
+    digitalWrite(RELAY_PIN, LOW);
     digitalWrite(LED_PIN, LOW);
 
-    // Connect to WiFi
     setupWiFi();
 
-    // Initialize NTP time
     timeClient.begin();
     timeClient.update();
     Serial.print("Current time: ");
     Serial.println(timeClient.getFormattedTime());
 
-    // Connect to Firebase
-    setupFirebase();
-
-    // Set initial state in Firebase
-    Firebase.setBool(firebaseData, statePath, false);
-    Firebase.setBool(firebaseData, onlinePath, true);
-    Firebase.setInt(firebaseData, lastSeenPath, timeClient.getEpochTime());
-
-    // Start streaming for real-time state changes
-    if (!Firebase.beginStream(streamData, statePath)) {
-        Serial.println("ERROR: Could not begin Firebase stream");
-        Serial.println(streamData.errorReason());
-    } else {
-        Serial.println("Firebase stream started on: " + statePath);
-    }
-    Firebase.setStreamCallback(streamData, streamCallback, streamTimeoutCallback);
+    setupMqtt();
 
     Serial.println("Setup complete! Device is ready.");
     Serial.println("===================================");
@@ -135,23 +170,28 @@ void setup() {
 // Main loop
 // ============================================================
 void loop() {
-    // Update NTP time
     timeClient.update();
 
-    // Send heartbeat every 30 seconds
+    if (!mqttClient.connected()) {
+        unsigned long now = millis();
+        if (now - lastMqttReconnect >= MQTT_RECONNECT_DELAY_MS) {
+            lastMqttReconnect = now;
+            reconnectMqtt();
+        }
+    }
+    mqttClient.loop();
+
     unsigned long now = millis();
     if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
         sendHeartbeat();
         lastHeartbeat = now;
     }
 
-    // Check schedules every 10 seconds
     if (now - lastScheduleCheck >= SCHEDULE_CHECK_INTERVAL_MS) {
         checkSchedules();
         lastScheduleCheck = now;
     }
 
-    // Small delay to prevent watchdog issues
     delay(100);
 }
 
@@ -166,7 +206,8 @@ void setupWiFi() {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < MAX_WIFI_RETRIES) {
+    while (WiFi.status() != WL_CONNECTED
+           && retries < MAX_WIFI_RETRIES) {
         delay(WIFI_RETRY_DELAY_MS);
         Serial.print(".");
         retries++;
@@ -177,7 +218,7 @@ void setupWiFi() {
         Serial.println("WiFi connected!");
         Serial.print("IP address: ");
         Serial.println(WiFi.localIP());
-        digitalWrite(LED_PIN, HIGH);  // LED on = connected
+        digitalWrite(LED_PIN, HIGH);
     } else {
         Serial.println();
         Serial.println("ERROR: WiFi connection failed! Restarting...");
@@ -186,21 +227,118 @@ void setupWiFi() {
 }
 
 // ============================================================
-// Firebase Setup
+// MQTT Setup
 // ============================================================
-void setupFirebase() {
-    Serial.println("Connecting to Firebase...");
+void setupMqtt() {
+    Serial.println("Configuring MQTT...");
 
-    firebaseConfig.host = FIREBASE_HOST;
-    firebaseConfig.signer.tokens.legacy_token = FIREBASE_AUTH;
+    espClient.setCACert(ca_cert);
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    mqttClient.setBufferSize(2048);
+    mqttClient.setCallback(mqttCallback);
 
-    Firebase.begin(&firebaseConfig, &firebaseAuth);
-    Firebase.reconnectWiFi(true);
+    reconnectMqtt();
+}
 
-    // Set read/write timeout
-    firebaseData.setResponseSize(1024);
+void reconnectMqtt() {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi disconnected! Reconnecting WiFi...");
+        digitalWrite(LED_PIN, LOW);
+        setupWiFi();
+    }
 
-    Serial.println("Firebase connected!");
+    Serial.print("Connecting to MQTT broker...");
+
+    bool connected = mqttClient.connect(
+        DEVICE_ID,
+        MQTT_USER,
+        MQTT_PASS,
+        TOPIC_ONLINE.c_str(),
+        1,      // QoS 1 for LWT
+        true,   // retained
+        "false"  // LWT payload: mark offline on disconnect
+    );
+
+    if (connected) {
+        Serial.println(" connected!");
+
+        // Publish online status
+        mqttClient.publish(
+            TOPIC_ONLINE.c_str(), "true", true
+        );
+
+        // Publish current relay state
+        publishState();
+
+        // Subscribe to command and schedule topics
+        mqttClient.subscribe(TOPIC_STATE_SET.c_str(), 1);
+        mqttClient.subscribe(TOPIC_SCHEDULES.c_str(), 1);
+
+        Serial.println("Subscribed to: " + TOPIC_STATE_SET);
+        Serial.println("Subscribed to: " + TOPIC_SCHEDULES);
+    } else {
+        Serial.print(" failed, rc=");
+        Serial.println(mqttClient.state());
+    }
+}
+
+// ============================================================
+// MQTT Callback — Incoming messages
+// ============================================================
+void mqttCallback(
+    char* topic, byte* payload, unsigned int length
+) {
+    String topicStr(topic);
+    String payloadStr;
+    payloadStr.reserve(length);
+    for (unsigned int i = 0; i < length; i++) {
+        payloadStr += (char)payload[i];
+    }
+
+    Serial.print("MQTT received [");
+    Serial.print(topicStr);
+    Serial.print("]: ");
+    Serial.println(payloadStr);
+
+    if (topicStr == TOPIC_STATE_SET) {
+        bool newState = (payloadStr == "true");
+        setRelay(newState);
+        publishState();
+    } else if (topicStr == TOPIC_SCHEDULES) {
+        if (payloadStr.length() == 0) return;
+
+        DynamicJsonDocument doc(4096);
+        DeserializationError err = deserializeJson(doc, payloadStr);
+        if (err) {
+            Serial.print("Schedule JSON parse error: ");
+            Serial.println(err.c_str());
+            return;
+        }
+
+        int version = doc["version"] | -1;
+        if (version <= schedulesVersion) {
+            Serial.println("Schedule version unchanged, skipping");
+            return;
+        }
+
+        schedulesVersion = version;
+        schedulesDoc = doc;
+
+        // Update timezone offset from document
+        const char* tz = doc["timezone"];
+        if (tz) {
+            long offset = doc["utcOffsetSeconds"] | -1;
+            if (offset >= 0) {
+                utcOffsetSeconds = offset;
+                timeClient.setTimeOffset(utcOffsetSeconds);
+                Serial.print("Timezone offset updated: ");
+                Serial.println(utcOffsetSeconds);
+            }
+        }
+
+        Serial.print("Schedules updated, version=");
+        Serial.println(schedulesVersion);
+    }
 }
 
 // ============================================================
@@ -212,88 +350,56 @@ void setRelay(bool on) {
         digitalWrite(RELAY_PIN, on ? HIGH : LOW);
         Serial.print("Relay switched: ");
         Serial.println(on ? "ON" : "OFF");
-
-        // Update state in Firebase
-        Firebase.setBool(firebaseData, statePath, on);
     }
 }
 
-// ============================================================
-// Firebase Stream Callback — Real-time state changes from app
-// ============================================================
-void streamCallback(StreamData data) {
-    if (data.dataType() == "boolean") {
-        bool newState = data.boolData();
-        Serial.print("Firebase stream received: ");
-        Serial.println(newState ? "ON" : "OFF");
-        setRelay(newState);
-    }
-}
-
-void streamTimeoutCallback(bool timeout) {
-    if (timeout) {
-        Serial.println("Firebase stream timeout — reconnecting...");
-    }
+void publishState() {
+    mqttClient.publish(
+        TOPIC_STATE.c_str(),
+        relayState ? "true" : "false",
+        true  // retained
+    );
 }
 
 // ============================================================
 // Heartbeat — Report online status
 // ============================================================
 void sendHeartbeat() {
-    // Check WiFi and reconnect if needed
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi disconnected! Reconnecting...");
         digitalWrite(LED_PIN, LOW);
         setupWiFi();
     }
 
-    Firebase.setBool(firebaseData, onlinePath, true);
-    Firebase.setInt(firebaseData, lastSeenPath, timeClient.getEpochTime());
+    if (mqttClient.connected()) {
+        String epoch = String(timeClient.getEpochTime());
+        mqttClient.publish(
+            TOPIC_LAST_SEEN.c_str(),
+            epoch.c_str(),
+            true  // retained
+        );
+    }
 }
 
 // ============================================================
 // Schedule Checker
 // ============================================================
 void checkSchedules() {
-    // Get current time
+    if (schedulesVersion < 0) return;
+
     int currentH, currentM;
     getTimeHHMM(currentH, currentM);
-    int currentDay = getDayOfWeek(); // 1=Mon ... 7=Sun
+    int currentDay = getDayOfWeek();
 
-    // Read all schedules from Firebase
-    if (!Firebase.getJSON(firebaseData, schedulesPath)) {
-        // No schedules or error — that's OK
-        return;
-    }
+    JsonArray schedules = schedulesDoc["schedules"];
+    if (schedules.isNull()) return;
 
-    // Parse the JSON
-    String jsonStr = firebaseData.jsonString();
-    if (jsonStr.length() == 0 || jsonStr == "null") {
-        return;
-    }
-
-    DynamicJsonDocument doc(4096);
-    DeserializationError error = deserializeJson(doc, jsonStr);
-    if (error) {
-        Serial.print("JSON parse error: ");
-        Serial.println(error.c_str());
-        return;
-    }
-
-    // Check each schedule
     bool shouldBeOn = false;
 
-    JsonObject root = doc.as<JsonObject>();
-    for (JsonPair schedule : root) {
-        JsonObject sched = schedule.value().as<JsonObject>();
+    for (JsonObject sched : schedules) {
+        if (!sched["enabled"].as<bool>()) continue;
 
-        // Skip disabled schedules
-        if (!sched["enabled"].as<bool>()) {
-            continue;
-        }
-
-        // Check if today is in the schedule's days
-        JsonArray days = sched["days"].as<JsonArray>();
+        JsonArray days = sched["days"];
         bool dayMatch = false;
         for (JsonVariant day : days) {
             if (day.as<int>() == currentDay) {
@@ -303,7 +409,6 @@ void checkSchedules() {
         }
         if (!dayMatch) continue;
 
-        // Parse on/off times
         String onTimeStr = sched["onTime"].as<String>();
         String offTimeStr = sched["offTime"].as<String>();
 
@@ -312,15 +417,17 @@ void checkSchedules() {
         int offH = offTimeStr.substring(0, 2).toInt();
         int offM = offTimeStr.substring(3, 5).toInt();
 
-        // Check if current time is within the on-off window
-        if (isTimeInRange(currentH, currentM, onH, onM, offH, offM)) {
+        if (isTimeInRange(currentH, currentM,
+                          onH, onM, offH, offM)) {
             shouldBeOn = true;
-            break;  // At least one schedule says ON
+            break;
         }
     }
 
-    // Apply schedule decision
-    setRelay(shouldBeOn);
+    if (relayState != shouldBeOn) {
+        setRelay(shouldBeOn);
+        publishState();
+    }
 }
 
 // ============================================================
@@ -330,8 +437,8 @@ int getDayOfWeek() {
     // NTP getDay() returns 0=Sunday, 1=Monday, ... 6=Saturday
     // We want 1=Monday ... 7=Sunday
     int day = timeClient.getDay();
-    if (day == 0) return 7;  // Sunday = 7
-    return day;              // Mon=1, Tue=2, ... Sat=6
+    if (day == 0) return 7;
+    return day;
 }
 
 void getTimeHHMM(int &hours, int &minutes) {
@@ -339,16 +446,18 @@ void getTimeHHMM(int &hours, int &minutes) {
     minutes = timeClient.getMinutes();
 }
 
-bool isTimeInRange(int currentH, int currentM, int onH, int onM, int offH, int offM) {
+bool isTimeInRange(
+    int currentH, int currentM,
+    int onH, int onM,
+    int offH, int offM
+) {
     int current = currentH * 60 + currentM;
     int onTime = onH * 60 + onM;
     int offTime = offH * 60 + offM;
 
     if (onTime <= offTime) {
-        // Normal range (e.g., 07:00 - 22:00)
         return current >= onTime && current < offTime;
     } else {
-        // Overnight range (e.g., 22:00 - 06:00)
         return current >= onTime || current < offTime;
     }
 }

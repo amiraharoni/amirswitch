@@ -8,9 +8,9 @@ A WiFi-connected smart plug that lets you control any 220V appliance from your A
 
 ```
 ┌──────────┐       ┌──────────┐       ┌──────────────┐       ┌─────────────┐
-│  Android  │──────▶│ Firebase  │──────▶│    ESP32      │──────▶│   Relay     │
-│   App     │ WiFi/ │ Realtime  │ WiFi  │  (AmirSwitch │ GPIO  │  (switches  │
-│           │◀──────│ Database  │◀──────│   firmware)  │◀──────│  220V AC)   │
+│  Android  │──────▶│ HiveMQ   │──────▶│    ESP32      │──────▶│   Relay     │
+│   App     │ WiFi/ │  MQTT    │ WiFi  │  (AmirSwitch │ GPIO  │  (switches  │
+│           │◀──────│  Cloud   │◀──────│   firmware)  │◀──────│  220V AC)   │
 └──────────┘  4G   └──────────┘       └──────────────┘       └─────────────┘
                                                                      │
                                                               ┌──────┴──────┐
@@ -21,8 +21,8 @@ A WiFi-connected smart plug that lets you control any 220V appliance from your A
 ```
 
 1. You tap ON/OFF in the app (or a schedule triggers)
-2. The command goes to Firebase Realtime Database (cloud)
-3. The ESP32 receives it instantly via a Firebase stream listener
+2. The command goes to HiveMQ Cloud Serverless (MQTT broker)
+3. The ESP32 receives it instantly via an MQTT subscription
 4. The ESP32 toggles GPIO27 → the relay clicks → power flows (or stops)
 5. Works from anywhere — home WiFi, mobile data, another country
 
@@ -49,8 +49,8 @@ amirswitch/
 │           ├── viewmodel/
 │           │   └── DeviceViewModel.kt   State management
 │           ├── data/
-│           │   ├── FirebaseRepository.kt   Firebase operations
-│           │   └── models/Schedule.kt      Schedule data model
+│           │   ├── MqttRepository.kt      MQTT operations
+│           │   └── models/Schedule.kt     Schedule data model
 │           └── ui/
 │               ├── theme/Theme.kt          Material 3 theme
 │               └── screens/
@@ -147,8 +147,10 @@ Edit `firmware/src/main.cpp` and replace these values:
 ```cpp
 #define WIFI_SSID       "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
-#define FIREBASE_HOST   "your-project-id.firebaseio.com"
-#define FIREBASE_AUTH   "your-firebase-database-secret"
+#define MQTT_HOST       "your-cluster.s1.eu.hivemq.cloud"
+#define MQTT_PORT       8883
+#define MQTT_USER       "your-mqtt-username"
+#define MQTT_PASS       "your-mqtt-password"
 #define DEVICE_ID       "device_001"
 ```
 
@@ -159,17 +161,19 @@ Edit `firmware/src/main.cpp` and replace these values:
 3. Click the Upload button (→) or run `pio run --target upload`
 4. Open Serial Monitor (115200 baud) to verify:
    - WiFi connection
-   - Firebase connection
+   - MQTT broker connection
    - Relay toggling
 
 ### Firmware Features
 
-- **Real-time control:** Listens to Firebase stream for instant ON/OFF response
+- **Real-time control:** Subscribes to MQTT topic for instant ON/OFF response
 - **Scheduling:** Checks schedules every 10 seconds against NTP time
-- **Heartbeat:** Reports online status to Firebase every 30 seconds
-- **Auto-reconnect:** Reconnects WiFi and Firebase if connection drops
-- **Timezone support:** Configurable UTC offset (default: UTC+2 for Israel)
+- **Heartbeat:** Reports online status via MQTT every 30 seconds
+- **Auto-reconnect:** Reconnects WiFi and MQTT if connection drops
+- **LWT (Last Will):** Broker automatically marks device offline on unexpected disconnect
+- **Timezone support:** Receives UTC offset from app via schedule document
 - **Overnight schedules:** Supports schedules that cross midnight (e.g., 22:00–06:00)
+- **TLS:** Connects to HiveMQ Cloud Serverless over TLS 1.2 with ISRG Root X1 CA certificate
 
 ---
 
@@ -180,28 +184,19 @@ Edit `firmware/src/main.cpp` and replace these values:
 - [Android Studio](https://developer.android.com/studio) (latest version)
 - Android device or emulator (API 26+)
 
-### Firebase Setup
+### MQTT Setup
 
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create a new project (e.g., "AmirSwitch")
-3. Add an Android app:
-   - Package name: `com.amirswitch.app`
-   - Download `google-services.json`
-   - Place it in `app/` directory
-4. Enable **Realtime Database:**
-   - Create database
-   - Start in **test mode** (for development)
-   - Note the database URL (e.g., `https://amirswitch-xxxxx-default-rtdb.firebaseio.com`)
-5. Enable **Authentication:**
-   - Go to Authentication → Sign-in method
-   - Enable **Anonymous** sign-in
+1. Go to [HiveMQ Cloud Serverless](https://console.hivemq.cloud/)
+2. Create a free cluster
+3. Note your cluster URL (e.g., `your-cluster.s1.eu.hivemq.cloud`)
+4. Create MQTT credentials (username + password)
+5. Update the credentials in `MqttRepository.kt`
 
 ### Building the App
 
 1. Open the project root in Android Studio
 2. Wait for Gradle sync to complete
-3. Ensure `google-services.json` is in `app/`
-4. Run on device/emulator
+3. Run on device/emulator
 
 ### App Screens
 
@@ -227,33 +222,36 @@ Edit `firmware/src/main.cpp` and replace these values:
 - "How It Works" info card
 - App version
 
-### Firebase Database Structure
+### MQTT Topic Schema
+
+| Topic | Direction | QoS | Retained | Payload |
+|-------|-----------|-----|----------|---------|
+| `amirswitch/{deviceId}/state` | ESP32 → App | 0 | Yes | `"true"` / `"false"` |
+| `amirswitch/{deviceId}/state/set` | App → ESP32 | 1 | No | `"true"` / `"false"` |
+| `amirswitch/{deviceId}/online` | ESP32 (LWT) | 1 | Yes | `"true"` / `"false"` |
+| `amirswitch/{deviceId}/last_seen` | ESP32 → App | 0 | Yes | epoch integer string |
+| `amirswitch/{deviceId}/schedules` | App → ESP32 | 1 | Yes | JSON schedule document |
+
+### Schedule Document
+
+The app publishes the full schedule document as a retained MQTT message. The ESP32 subscribes and receives it into RAM.
 
 ```json
 {
-  "devices": {
-    "device_001": {
-      "state": true,
-      "online": true,
-      "lastSeen": 1710000000,
-      "schedules": {
-        "schedule_1": {
-          "name": "Morning Heater",
-          "onTime": "07:00",
-          "offTime": "08:30",
-          "days": [1, 2, 3, 4, 5],
-          "enabled": true
-        },
-        "schedule_2": {
-          "name": "Night Light",
-          "onTime": "19:00",
-          "offTime": "23:00",
-          "days": [1, 2, 3, 4, 5, 6, 7],
-          "enabled": true
-        }
-      }
+  "version": 12,
+  "updatedAt": 1712345678,
+  "timezone": "Asia/Jerusalem",
+  "utcOffsetSeconds": 7200,
+  "schedules": [
+    {
+      "id": "a1b2c3d4",
+      "name": "Morning Heater",
+      "onTime": "07:00",
+      "offTime": "08:30",
+      "days": [1, 2, 3, 4, 5],
+      "enabled": true
     }
-  }
+  ]
 }
 ```
 
@@ -263,26 +261,26 @@ Edit `firmware/src/main.cpp` and replace these values:
 
 ## Step-by-Step Build Guide
 
-### Step 1 — Set Up Firebase
-1. Create Firebase project
-2. Enable Realtime Database + Anonymous Auth
-3. Note your database URL and database secret
+### Step 1 — Set Up HiveMQ Cloud Serverless
+1. Create a free HiveMQ Cloud Serverless cluster
+2. Create MQTT credentials (username + password)
+3. Note your cluster URL and port (8883)
 
 ### Step 2 — Flash the ESP32
 1. Install PlatformIO in VS Code
-2. Edit WiFi and Firebase credentials in `main.cpp`
+2. Edit WiFi and MQTT credentials in `main.cpp`
 3. Flash firmware to ESP32
-4. Verify via Serial Monitor that it connects to WiFi and Firebase
+4. Verify via Serial Monitor that it connects to WiFi and MQTT
 
 ### Step 3 — Test Manually
-1. Open Firebase Console → Realtime Database
-2. Navigate to `devices/device_001/state`
-3. Change value to `true` → hear relay click ON
-4. Change to `false` → hear relay click OFF
+1. Install [MQTTX](https://mqttx.app/) desktop client
+2. Connect to your HiveMQ Cloud Serverless cluster
+3. Publish `true` to `amirswitch/device_001/state/set` → hear relay click ON
+4. Publish `false` → hear relay click OFF
 
 ### Step 4 — Build the Android App
 1. Open project in Android Studio
-2. Add `google-services.json`
+2. Update MQTT credentials in `MqttRepository.kt`
 3. Build and install on your phone
 4. Toggle the power button → verify relay responds
 
@@ -332,11 +330,11 @@ Edit `firmware/src/main.cpp` and replace these values:
 |---------|----------|
 | ESP32 doesn't connect to WiFi | Check SSID/password in firmware. Ensure 2.4GHz network (ESP32 doesn't support 5GHz) |
 | ESP32 not found on USB | Try a different micro-USB cable (must be a data cable, not charge-only) |
-| Firebase connection fails | Verify FIREBASE_HOST and FIREBASE_AUTH in firmware. Check Firebase console for database rules |
-| App shows "Device Offline" | Check ESP32 serial monitor. Verify WiFi connection. Check Firebase heartbeat data |
+| MQTT connection fails | Verify MQTT_HOST, MQTT_USER, and MQTT_PASS in firmware. Check HiveMQ Cloud Serverless console for cluster status |
+| App shows "Device Offline" | Check ESP32 serial monitor. Verify WiFi connection. Check MQTT broker connectivity |
 | Relay doesn't click | Verify wiring: GPIO27 → Relay IN, 5V → Relay VCC, GND → Relay GND |
-| Schedule doesn't trigger | Check timezone offset in firmware (UTC_OFFSET_SECONDS). Verify NTP time in serial monitor |
-| App can't toggle device | Ensure `google-services.json` is in `app/`. Check Firebase database rules allow read/write |
+| Schedule doesn't trigger | Check timezone offset in schedule document. Verify NTP time in serial monitor |
+| App can't toggle device | Verify MQTT credentials in MqttRepository.kt. Check HiveMQ Cloud Serverless cluster is running |
 
 ---
 

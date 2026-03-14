@@ -123,8 +123,8 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     val steps = listOf(
-                        "1. The ESP32 connects to your WiFi and Firebase",
-                        "2. This app sends ON/OFF commands via Firebase",
+                        "1. The ESP32 connects to your WiFi and MQTT broker",
+                        "2. This app sends ON/OFF commands via MQTT",
                         "3. The ESP32 receives commands and toggles the relay",
                         "4. Schedules are checked every 10 seconds on the ESP32",
                         "5. Works from anywhere — not just your home WiFi!"

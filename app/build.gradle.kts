@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.gms.google-services")
 }
 
 android {
@@ -62,10 +61,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
 
-    // Firebase
-    implementation(platform("com.google.firebase:firebase-bom:34.10.0"))
-    implementation("com.google.firebase:firebase-database")
-    implementation("com.google.firebase:firebase-auth")
+    // MQTT
+    implementation("com.hivemq:hivemq-mqtt-client:1.3.3")
 
     // Core
     implementation("androidx.core:core-ktx:1.18.0")
